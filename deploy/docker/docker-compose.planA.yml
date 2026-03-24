@@ -1,0 +1,21 @@
+# deploy/docker/docker-compose.planA.yml
+services:
+  legs-dog:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/dog.Dockerfile
+    network_mode: host
+    volumes:
+      - ../../:/workspace/legs
+      - /srv/legs-data:/data
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      - LEGS_SERVER_ADDR=${LEGS_SERVER_ADDR:-10.150.16.29:50051}
+      - PYTHONPATH=/workspace/legs/packages/legs_common/src:/workspace/legs/packages/legs_dog/src:/workspace/legs/packages/legs_server/src
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    command: ["bash", "-lc", "python3 -m legs_dog.main --mode=sim --server=${LEGS_SERVER_ADDR:-10.150.16.29:50051}"]

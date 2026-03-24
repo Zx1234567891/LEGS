@@ -1,0 +1,61 @@
+// api/proto/legs.proto
+// Canonical gRPC IDL for LEGS Dog <-> Server communication.
+syntax = "proto3";
+package legs.v1;
+
+option java_package = "com.legs.v1";
+option go_package = "legs/api/v1";
+
+message Header {
+  string session_id = 1;
+  string episode_id = 2;
+  uint64 seq = 3;
+  uint64 t_wall_ns = 4;
+  uint64 t_mono_ns = 5;
+  string source = 6;     // "sim" | "real"
+  string frame_id = 7;
+}
+
+message Observation {
+  Header h = 1;
+  bytes payload = 2;      // CBOR/MsgPack/custom binary; split if needed
+  string encoding = 3;    // "msgpack" | "cbor-zstd" | "json"
+}
+
+message Action {
+  uint64 seq_ref = 1;     // must reference Observation.h.seq
+  string action_type = 2; // "twist" | "foot_targets" | "gait_params"
+  bytes payload = 3;
+  string model_id = 4;
+  uint64 t_infer_ns = 5;
+}
+
+message Heartbeat {
+  string node_id = 1;
+  string role = 2;        // "dog" | "server"
+  uint64 t_mono_ns = 3;
+  uint64 last_seq_sent = 4;
+  uint64 last_seq_recv = 5;
+  double rtt_ms_p50 = 6;
+  double rtt_ms_p99 = 7;
+  string health = 8;      // "ok" | "degraded" | "error"
+}
+
+message ModelInfoRequest {}
+
+message ModelInfoResponse {
+  string model_id = 1;
+  string artifact_sha256 = 2;
+  string git_commit = 3;
+  string container_image = 4;
+  string created_at = 5;
+}
+
+service LegsInference {
+  // Bidirectional streaming: Dog sends Observations, Server replies with Actions.
+  rpc StreamInfer(stream Observation) returns (stream Action);
+  // Health check / latency probe.
+  rpc Ping(Heartbeat) returns (Heartbeat);
+  // Query current model version for reproducibility.
+  rpc GetModelInfo(ModelInfoRequest) returns (ModelInfoResponse);
+}

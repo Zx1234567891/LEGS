@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audit output
+_audit/
+
+# pytest / mypy
+.pytest_cache/
+.mypy_cache/
+
+# Docker
+.docker/
+
+# Secrets — never commit
+*.pem
+*.key
+.env.local
+credentials.json
+
+# Data / models (use Git LFS for these)
+*.pt
+*.pth
+*.onnx
+*.bin
+/data/

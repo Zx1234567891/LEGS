@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "legs"
+version = "0.1.0"
+description = "LEGS: dual-machine robot control system (Dog + Server)"
+requires-python = ">=3.11"
+dependencies = [
+    "msgpack>=1.0",
+    "grpcio>=1.60",
+    "grpcio-tools>=1.60",
+    "protobuf>=4.25",
+    "prometheus-client>=0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "mypy>=1.8",
+    "ruff>=0.2",
+]
+
+[tool.setuptools.packages.find]
+where = [
+    "packages/legs_common/src",
+    "packages/legs_dog/src",
+    "packages/legs_server/src",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "packages/legs_common/tests",
+    "packages/legs_dog/tests",
+    "packages/legs_server/tests",
+    "tests/e2e",
+]
+pythonpath = [
+    "packages/legs_common/src",
+    "packages/legs_dog/src",
+    "packages/legs_server/src",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
