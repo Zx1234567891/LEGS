@@ -1,0 +1,48 @@
+# deploy/k8s/server-train-job.yaml
+# Kubernetes Job for NWM GPU training.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: legs-nwm-train
+  labels:
+    app: legs
+    component: train
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: legs
+        component: train
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: nwm-train
+          image: legs-server:latest
+          command:
+            - python3
+            - -m
+            - legs_server.model.nwm_train
+            - --data-dir=/data/rollouts
+            - --epochs=100
+            - --output-dir=/data/models
+            - --lr=1e-4
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              memory: "16Gi"
+              cpu: "4"
+            requests:
+              nvidia.com/gpu: "1"
+              memory: "8Gi"
+              cpu: "2"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          env:
+            - name: PYTHONPATH
+              value: "/workspace/legs/packages/legs_common/src:/workspace/legs/packages/legs_dog/src:/workspace/legs/packages/legs_server/src"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: legs-data-pvc

@@ -1,0 +1,18 @@
+# deploy/systemd/legs-server.service
+[Unit]
+Description=LEGS Server runtime (gRPC inference + metrics)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=legs
+WorkingDirectory=/opt/legs
+EnvironmentFile=/opt/legs/deploy/env/legs.env
+ExecStart=/usr/bin/docker compose -f /opt/legs/deploy/docker/docker-compose.planB.yml up --remove-orphans
+ExecStop=/usr/bin/docker compose -f /opt/legs/deploy/docker/docker-compose.planB.yml down
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

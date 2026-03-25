@@ -1,0 +1,92 @@
+# deploy/k8s/server-infer-deploy.yaml
+# Kubernetes Deployment for NWM inference service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legs-server-infer
+  labels:
+    app: legs
+    component: infer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: legs
+      component: infer
+  template:
+    metadata:
+      labels:
+        app: legs
+        component: infer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9102"
+    spec:
+      containers:
+        - name: legs-server
+          image: legs-server:latest
+          args:
+            - --grpc=0.0.0.0:50051
+            - --metrics=0.0.0.0:9102
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: 9102
+              protocol: TCP
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              memory: "8Gi"
+              cpu: "4"
+            requests:
+              nvidia.com/gpu: "1"
+              memory: "4Gi"
+              cpu: "2"
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import grpc; ch = grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=2)"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import grpc; ch = grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=2)"
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          env:
+            - name: PYTHONPATH
+              value: "/workspace/legs/packages/legs_common/src:/workspace/legs/packages/legs_dog/src:/workspace/legs/packages/legs_server/src"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: legs-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: legs-server-infer
+  labels:
+    app: legs
+    component: infer
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+    - name: metrics
+      port: 9102
+      targetPort: metrics
+  selector:
+    app: legs
+    component: infer

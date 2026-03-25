@@ -40,6 +40,9 @@ credentials.json
 # Data / models (use Git LFS for these)
 *.pt
 *.pth
+*.pth.tar
 *.onnx
 *.bin
 /data/
+/nwm/
+.cache/
