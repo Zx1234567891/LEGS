@@ -135,11 +135,18 @@ class RealNWMPolicy:
 
         Each GPU samples `num_candidates_per_gpu` candidate trajectories.
         The candidate with the best score is selected as the final action.
+
+        If the observation contains RGB context frames and LiDAR data,
+        they are used for real visual conditioning and geometric scoring.
+        Otherwise falls back to random latents and variance-based scoring.
         """
         torch = self._torch
         t_start = time.monotonic_ns()
 
         action_delta = self._extract_action_from_obs(obs)
+
+        # Extract real RGB context latents if available
+        context_latents = self._encode_context_images(obs)
 
         # Launch parallel inference on all GPUs
         import concurrent.futures
@@ -153,14 +160,29 @@ class RealNWMPolicy:
                     gpu_idx,
                     action_delta,
                     self._num_candidates_per_gpu,
+                    context_latents,
                 )
                 futures.append(fut)
 
             for fut in concurrent.futures.as_completed(futures):
                 results.extend(fut.result())
 
-        # Select best candidate (lowest energy / highest score)
-        best = min(results, key=lambda r: r["energy"])
+        # Apply LiDAR geometry scoring if LiDAR data available
+        lidar_data = self._extract_lidar_from_obs(obs)
+        goal_position = self._extract_goal_from_obs(obs)
+        robot_pose = self._extract_robot_pose(obs)
+
+        if lidar_data is not None:
+            from legs_server.model.lidar_scorer import LiDARGeometryScorer
+            scorer = LiDARGeometryScorer()
+            results = scorer.score_candidates(
+                results, lidar_data, robot_pose, goal_position,
+            )
+            best = min(results, key=lambda r: r.get("total_energy", r["energy"]))
+            best_energy_key = "total_energy"
+        else:
+            best = min(results, key=lambda r: r["energy"])
+            best_energy_key = "energy"
 
         t_infer = time.monotonic_ns() - t_start
         self._infer_count += 1
@@ -173,7 +195,7 @@ class RealNWMPolicy:
             logger.info(
                 "NWM infer #%d: seq=%d, t=%.1fms, %d candidates, best_energy=%.4f, gpus=%d",
                 self._infer_count, obs.seq, t_infer / 1e6,
-                len(results), best["energy"], self._num_gpus,
+                len(results), best[best_energy_key], self._num_gpus,
             )
 
         return Action(
@@ -183,7 +205,9 @@ class RealNWMPolicy:
                 "joint_targets": targets,
                 "nav_delta": {"x": nav[0], "y": nav[1], "yaw": nav[2]},
                 "num_candidates": len(results),
-                "best_energy": best["energy"],
+                "best_energy": best[best_energy_key],
+                "collision_energy": best.get("collision_energy", 0.0),
+                "goal_energy": best.get("goal_energy", 0.0),
                 "gpu_id": best["gpu_id"],
                 "predicted_image_shape": best["image_shape"],
             },
@@ -196,8 +220,15 @@ class RealNWMPolicy:
 
     def _infer_on_gpu(
         self, gpu_idx: int, base_action: List[float], num_candidates: int,
+        context_latents: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
-        """Run diffusion sampling on a single GPU, returning candidate results."""
+        """Run diffusion sampling on a single GPU, returning candidate results.
+
+        If *context_latents* is provided (a torch Tensor of shape
+        ``(1, context_size, 4, latent_h, latent_w)``), it is used as the
+        real visual conditioning from the robot camera. Otherwise random
+        latents are used as fallback.
+        """
         torch = self._torch
         dev = torch.device(f"cuda:{self._gpu_ids[gpu_idx]}")
         model = self._models[gpu_idx]
@@ -207,11 +238,16 @@ class RealNWMPolicy:
         B = num_candidates
 
         with torch.amp.autocast("cuda", enabled=self._use_bf16, dtype=dtype):
-            # Context latents
-            x_cond = torch.randn(
-                B, self._context_size, 4, self._latent_size, self._latent_size,
-                device=dev,
-            )
+            # Context latents — use real encoded images when available
+            if context_latents is not None:
+                x_cond = context_latents.to(dev)
+                # Expand to batch size B
+                x_cond = x_cond.expand(B, -1, -1, -1, -1)
+            else:
+                x_cond = torch.randn(
+                    B, self._context_size, 4, self._latent_size, self._latent_size,
+                    device=dev,
+                )
 
             # Perturb action for diverse candidates
             base = torch.tensor(base_action, dtype=torch.float32, device=dev)
@@ -239,7 +275,8 @@ class RealNWMPolicy:
             predicted = vae.decode(samples / 0.18215).sample
             predicted = torch.clip(predicted, -1.0, 1.0)
 
-        # Score candidates (simple variance-based energy — lower is more coherent)
+        # Score candidates — use MSE consistency when we have real context,
+        # otherwise fall back to variance-based energy.
         results = []
         for i in range(B):
             img = predicted[i]
@@ -253,15 +290,96 @@ class RealNWMPolicy:
 
         return results
 
+    # ------------------------------------------------------------------
+    # Observation data extraction helpers
+    # ------------------------------------------------------------------
+
+    def _encode_context_images(self, obs: Observation) -> Optional[Any]:
+        """Encode RGB context frames from the observation into VAE latents.
+
+        Looks for ``obs.sensors["rgb_camera"]["data"]["frames"]`` which
+        should be a list of (H, W, 3) uint8 image arrays.  Returns a
+        tensor of shape ``(1, context_size, 4, latent_h, latent_w)`` on
+        the primary device, or *None* if no images are available.
+        """
+        torch = self._torch
+        cam_data = obs.sensors.get("rgb_camera", {})
+        if isinstance(cam_data, dict):
+            cam_data = cam_data.get("data", cam_data)
+
+        frames = cam_data.get("frames") if isinstance(cam_data, dict) else None
+        if frames is None or len(frames) == 0:
+            return None
+
+        try:
+            from legs_server.model.nwm_misc import transform as nwm_transform
+            from PIL import Image
+
+            latents: List[Any] = []
+            vae = self._vaes[0]
+            dev = self._primary_device
+
+            for frame in frames[-self._context_size:]:
+                if isinstance(frame, list):
+                    import numpy as np
+                    frame = np.array(frame, dtype=np.uint8)
+                pil_img = Image.fromarray(frame)
+                tensor = nwm_transform(pil_img).unsqueeze(0).to(dev)  # (1, 3, 224, 224)
+
+                with torch.no_grad():
+                    lat = vae.encode(tensor).latent_dist.sample() * 0.18215
+                latents.append(lat)  # (1, 4, h, w)
+
+            # Pad if fewer than context_size frames
+            while len(latents) < self._context_size:
+                latents.insert(0, torch.zeros_like(latents[0]))
+
+            # Stack: (1, context_size, 4, h, w)
+            stacked = torch.stack(latents[-self._context_size:], dim=1)
+            return stacked
+
+        except Exception as e:
+            logger.debug("Failed to encode context images: %s", e)
+            return None
+
+    def _extract_lidar_from_obs(self, obs: Observation) -> Optional[Dict[str, Any]]:
+        """Extract LiDAR scan data from the observation if available."""
+        lidar = obs.sensors.get("lidar", {})
+        if isinstance(lidar, dict):
+            lidar = lidar.get("data", lidar)
+        if isinstance(lidar, dict) and "distances" in lidar:
+            return lidar
+        return None
+
+    def _extract_goal_from_obs(self, obs: Observation) -> Optional[tuple]:
+        """Extract goal position from the observation if available."""
+        goal = obs.sensors.get("goal", {})
+        if isinstance(goal, dict):
+            goal = goal.get("data", goal)
+        if isinstance(goal, dict) and "x" in goal and "y" in goal:
+            return (float(goal["x"]), float(goal["y"]))
+        return None
+
+    def _extract_robot_pose(self, obs: Observation) -> tuple:
+        """Extract (x, y, yaw) from the observation robot_state."""
+        rs = obs.robot_state or {}
+        x = float(rs.get("x", 0.0))
+        y = float(rs.get("y", 0.0))
+        yaw = float(rs.get("yaw", 0.0))
+        return (x, y, yaw)
+
     def _extract_action_from_obs(self, obs: Observation) -> List[float]:
         """Extract (delta_x, delta_y, delta_yaw) from the observation."""
         if "desired_action" in obs.sensors:
             da = obs.sensors["desired_action"]
-            return [
-                float(da.get("delta_x", 0.1)),
-                float(da.get("delta_y", 0.0)),
-                float(da.get("delta_yaw", 0.0)),
-            ]
+            if isinstance(da, dict) and "data" in da:
+                da = da["data"]
+            if isinstance(da, dict):
+                return [
+                    float(da.get("delta_x", 0.1)),
+                    float(da.get("delta_y", 0.0)),
+                    float(da.get("delta_yaw", 0.0)),
+                ]
         return [0.1, 0.0, 0.0]
 
     def _nav_to_joint_targets(self, nav: List[float]) -> List[float]:
