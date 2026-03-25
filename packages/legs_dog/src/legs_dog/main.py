@@ -47,6 +47,10 @@ def parse_args() -> argparse.Namespace:
         help="Navigation scene: indoor/outdoor/maze or YAML name in assets/scenes/",
     )
     parser.add_argument(
+        "--robot", choices=["go1", "laikago"], default="go1",
+        help="Robot model: go1 (Unitree Go1) or laikago (pybullet_data fallback)",
+    )
+    parser.add_argument(
         "--goal", type=str, default="4.0,0.0",
         help="Navigation goal as x,y (e.g. '4.0,2.0')",
     )
@@ -107,13 +111,14 @@ def main() -> None:
         sim = PyBulletSim(
             gui=not args.no_gui,
             scene=args.scene,
+            robot=args.robot,
             source="sim",
         )
         sim.set_goal(goal_x, goal_y)
         actuator = sim.actuator
         logger.info(
-            "PyBulletSim initialized [scene=%s, session=%s, episode=%s]",
-            args.scene, sim.session_id, sim.episode_id,
+            "PyBulletSim initialized [robot=%s, scene=%s, session=%s, episode=%s]",
+            args.robot, args.scene, sim.session_id, sim.episode_id,
         )
 
     elif args.mode == "sim" and args.sim_backend == "fake":

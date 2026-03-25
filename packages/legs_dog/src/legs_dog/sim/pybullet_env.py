@@ -126,7 +126,7 @@ def load_scene_from_yaml(path: str) -> SceneConfig:
 
 def _find_yaml_scene(name: str) -> Optional[str]:
     """Search for a YAML scene file in the assets/scenes directory."""
-    scenes_dir = os.path.join(os.path.dirname(__file__), "..", "assets", "scenes")
+    scenes_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets", "scenes")
     candidate = os.path.join(scenes_dir, f"{name}.yaml")
     if os.path.isfile(candidate):
         return candidate
@@ -144,6 +144,7 @@ class PyBulletQuadrupedEnv:
         self,
         gui: bool = True,
         scene: str = "indoor",
+        robot: str = "go1",
         time_step: float = 1.0 / 240.0,
         robot_start_pos: Tuple[float, float, float] = (0.0, 0.0, 0.42),
         robot_start_orn_yaw: float = 0.0,
@@ -153,6 +154,7 @@ class PyBulletQuadrupedEnv:
 
         self._gui = gui
         self._time_step = time_step
+        self._robot_type = robot
 
         # Connect to physics server
         if gui:
@@ -169,12 +171,9 @@ class PyBulletQuadrupedEnv:
         # Load ground plane
         self._plane_id = p.loadURDF("plane.urdf", physicsClientId=self._cid)
 
-        # Load robot — use laikago from pybullet_data
+        # Load robot
         start_orn = p.getQuaternionFromEuler([0, 0, robot_start_orn_yaw])
-        urdf_path = os.path.join(pybullet_data.getDataPath(), "laikago", "laikago_toes.urdf")
-        if not os.path.exists(urdf_path):
-            # Fallback: use laikago without toes
-            urdf_path = os.path.join(pybullet_data.getDataPath(), "laikago", "laikago.urdf")
+        urdf_path = self._resolve_urdf(robot)
 
         self._robot_id = p.loadURDF(
             urdf_path,
@@ -230,7 +229,35 @@ class PyBulletQuadrupedEnv:
         for _ in range(100):
             p.stepSimulation(physicsClientId=self._cid)
 
-        logger.info("PyBulletQuadrupedEnv ready [scene=%s, joints=%d]", scene, self._num_joints)
+        logger.info("PyBulletQuadrupedEnv ready [robot=%s, scene=%s, joints=%d]", robot, scene, self._num_joints)
+
+    # ------------------------------------------------------------------
+    # URDF resolution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_urdf(robot: str) -> str:
+        """Find the URDF file for the requested robot model.
+
+        Priority:
+          1. Go1 URDF in assets/urdf/go1_description/
+          2. Laikago from pybullet_data (fallback)
+        """
+        if robot == "go1":
+            # assets/ is at packages/legs_dog/assets/ (3 levels up from sim/)
+            assets_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets", "urdf")
+            go1_path = os.path.join(assets_dir, "go1_description", "go1.urdf")
+            if os.path.isfile(go1_path):
+                logger.info("Loading Go1 URDF from %s", go1_path)
+                return go1_path
+            logger.warning("Go1 URDF not found at %s — falling back to Laikago", go1_path)
+
+        # Laikago fallback
+        urdf_path = os.path.join(pybullet_data.getDataPath(), "laikago", "laikago_toes.urdf")
+        if not os.path.exists(urdf_path):
+            urdf_path = os.path.join(pybullet_data.getDataPath(), "laikago", "laikago.urdf")
+        logger.info("Loading Laikago URDF from %s", urdf_path)
+        return urdf_path
 
     # ------------------------------------------------------------------
     # Properties

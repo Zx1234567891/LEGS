@@ -148,10 +148,11 @@ class PyBulletSim:
         self,
         gui: bool = True,
         scene: str = "indoor",
+        robot: str = "go1",
         source: str = "sim",
         context_size: int = 4,
     ) -> None:
-        self._env = PyBulletQuadrupedEnv(gui=gui, scene=scene)
+        self._env = PyBulletQuadrupedEnv(gui=gui, scene=scene, robot=robot)
         self.actuator = PyBulletActuator(self._env)
 
         # Sensors
