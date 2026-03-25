@@ -156,11 +156,12 @@ def main() -> None:
             mcts = NavigationMCTS(
                 lidar_scorer=lidar_scorer,
                 max_depth=3,
-                num_candidates=8,
-                num_iterations=30,
+                num_candidates=12,
+                num_iterations=60,
+                action_range=1.2,
             )
             local_policy = _MCTSLocalPolicy(mcts, goal=(goal_x, goal_y))
-            logger.info("MCTS local policy enabled [depth=3, candidates=8, iterations=30]")
+            logger.info("MCTS local policy enabled [depth=3, candidates=12, iterations=60, action_range=1.2]")
         else:
             from legs_server.model.nwm_infer import StubNWMPolicy
             local_policy = StubNWMPolicy(model_tag="local-stub-v0.1.0")

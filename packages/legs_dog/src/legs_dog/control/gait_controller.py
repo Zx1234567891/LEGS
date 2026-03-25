@@ -35,12 +35,12 @@ _HIP_SIGN: List[float] = [1.0, -1.0, 1.0, -1.0]
 class GaitConfig:
     """Tunable gait parameters."""
     gait_freq: float = 3.5       # Hz — full stride cycle frequency
-    step_height: float = 0.06    # metres — peak foot lift during swing
+    step_height: float = 0.08    # metres — peak foot lift during swing
     stand_height: float = 0.35   # metres — nominal hip-to-foot vertical
-    stride_scale: float = 0.35   # maps |cmd_vel| → stride amplitude
-    max_stride: float = 0.25     # clamp on stride amplitude (rad equiv)
-    turn_gain: float = 0.20      # dyaw → hip abduction delta
-    lateral_gain: float = 0.10   # dy → hip abduction delta
+    stride_scale: float = 0.55   # maps |cmd_vel| → stride amplitude
+    max_stride: float = 0.40     # clamp on stride amplitude (rad equiv)
+    turn_gain: float = 0.25      # dyaw → hip abduction delta
+    lateral_gain: float = 0.15   # dy → hip abduction delta
 
 
 class TrotGaitController:
@@ -96,7 +96,7 @@ class TrotGaitController:
         self._phase %= 2.0 * math.pi
 
         # Command magnitude determines stride amplitude
-        cmd_mag = min(math.sqrt(dx * dx + dy * dy) + abs(dyaw) * 0.3, 1.0)
+        cmd_mag = min(math.sqrt(dx * dx + dy * dy) + abs(dyaw) * 0.3, 2.0)
         stride = cmd_mag * cfg.stride_scale
         stride = min(stride, cfg.max_stride)
 
@@ -126,7 +126,7 @@ class TrotGaitController:
                 calf_delta = 0.0
 
             # Forward/backward from dx
-            thigh_delta += dx * 0.12
+            thigh_delta += dx * 0.25
 
             # Hip abduction: steering + lateral
             hip_delta = (

@@ -202,9 +202,20 @@ class Navigator:
                 break
 
             # --- Robot pose ---
-            pos, _, yaw = self._sim.env.get_robot_pose()
-            rx, ry = float(pos[0]), float(pos[1])
+            pos, orn, yaw = self._sim.env.get_robot_pose()
+            rx, ry, rz = float(pos[0]), float(pos[1]), float(pos[2])
             elapsed = time.monotonic() - start_time
+
+            # --- Topple detection: if robot fell over, reset ---
+            if rz < 0.15:
+                logger.warning("Robot toppled (z=%.2f) at step %d — resetting", rz, step)
+                self._sim.env.reset()
+                self._smoother.reset()
+                position_history.clear()
+                recovery_cooldown = 20
+                # Re-read pose after reset
+                pos, orn, yaw = self._sim.env.get_robot_pose()
+                rx, ry = float(pos[0]), float(pos[1])
 
             # Record trajectory
             stats.trajectory.append((rx, ry, float(yaw), elapsed))
@@ -330,7 +341,7 @@ class Navigator:
             self._sim.actuator.apply(backup)
 
     def _execute_recovery_turn(self) -> None:
-        """Back up then turn to escape stuck position."""
+        """Back up then turn towards the goal to escape stuck position."""
         # Back up
         for _ in range(8):
             backup = Action(
@@ -339,11 +350,24 @@ class Navigator:
                 payload={"nav_delta": {"x": -0.2, "y": 0.0, "yaw": 0.0}},
             )
             self._sim.actuator.apply(backup)
-        # Turn
-        for _ in range(12):
+
+        # Compute turn direction towards goal
+        goal = self._sim.env.goal_position
+        if goal is not None:
+            pos, _, yaw = self._sim.env.get_robot_pose()
+            goal_angle = math.atan2(goal[1] - pos[1], goal[0] - pos[0])
+            angle_error = math.atan2(
+                math.sin(goal_angle - yaw), math.cos(goal_angle - yaw)
+            )
+            turn_dir = 0.6 if angle_error > 0 else -0.6
+        else:
+            turn_dir = 0.5
+
+        # Turn towards goal
+        for _ in range(15):
             turn = Action(
                 seq_ref=0,
                 action_type="recovery",
-                payload={"nav_delta": {"x": 0.0, "y": 0.0, "yaw": 0.5}},
+                payload={"nav_delta": {"x": 0.1, "y": 0.0, "yaw": turn_dir}},
             )
             self._sim.actuator.apply(turn)
