@@ -246,7 +246,7 @@ class PyBulletQuadrupedEnv:
         if robot == "go1":
             # assets/ is at packages/legs_dog/assets/ (3 levels up from sim/)
             assets_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets", "urdf")
-            go1_path = os.path.join(assets_dir, "go1_description", "go1.urdf")
+            go1_path = os.path.join(assets_dir, "go1_description", "urdf", "go1.urdf")
             if os.path.isfile(go1_path):
                 logger.info("Loading Go1 URDF from %s", go1_path)
                 return go1_path
