@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from legs_dog.control.gait_controller import TrotGaitController
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -109,6 +111,28 @@ SCENE_REGISTRY = {
 }
 
 
+def load_scene_from_yaml(path: str) -> SceneConfig:
+    """Load a scene definition from a YAML file."""
+    import yaml
+    with open(path, "r") as f:
+        data = yaml.safe_load(f)
+    return SceneConfig(
+        name=data.get("name", "custom"),
+        walls=[tuple(w) for w in data.get("walls", [])],
+        obstacles=[tuple(o) for o in data.get("obstacles", [])],
+        ground_color=tuple(data.get("ground_color", [0.85, 0.85, 0.80, 1.0])),
+    )
+
+
+def _find_yaml_scene(name: str) -> Optional[str]:
+    """Search for a YAML scene file in the assets/scenes directory."""
+    scenes_dir = os.path.join(os.path.dirname(__file__), "..", "assets", "scenes")
+    candidate = os.path.join(scenes_dir, f"{name}.yaml")
+    if os.path.isfile(candidate):
+        return candidate
+    return None
+
+
 class PyBulletQuadrupedEnv:
     """PyBullet simulation environment for a 12-DOF quadruped robot.
 
@@ -184,6 +208,9 @@ class PyBulletQuadrupedEnv:
         # Build scene
         self._scene_bodies: List[int] = []
         self._build_scene(scene)
+
+        # Gait controller
+        self._gait = TrotGaitController()
 
         # Goal marker
         self._goal_marker_id: Optional[int] = None
@@ -285,47 +312,10 @@ class PyBulletQuadrupedEnv:
     def apply_nav_delta(self, dx: float, dy: float, dyaw: float) -> None:
         """Convert a navigation delta (dx, dy, dyaw) into walking joint targets.
 
-        This is a simplified gait controller: it creates a trotting-like
-        pattern where diagonal legs move in phase.
+        Uses TrotGaitController for realistic diagonal trot gait with
+        half-ellipse swing trajectories and Raibert-style stance retraction.
         """
-        pos, orn, yaw = self.get_robot_pose()
-
-        # Convert to world frame delta
-        cos_y, sin_y = math.cos(yaw), math.sin(yaw)
-        world_dx = dx * cos_y - dy * sin_y
-        world_dy = dx * sin_y + dy * cos_y
-
-        # Desired base velocity
-        desired_vx = world_dx * 2.0  # scale factor
-        desired_vy = world_dy * 2.0
-        desired_vyaw = dyaw * 1.5
-
-        # Simple gait: modulate standing angles based on velocity commands
-        import time
-        phase = time.monotonic() * 4.0  # gait frequency ~4Hz
-
-        targets = list(STAND_ANGLES)
-        swing_amplitude = 0.3
-        stride = min(abs(dx) + abs(dy), 1.0) * swing_amplitude
-
-        for leg_idx in range(4):
-            base = leg_idx * 3
-            # Diagonal trot: legs 0,3 in phase, legs 1,2 anti-phase
-            if leg_idx in (0, 3):
-                leg_phase = phase
-            else:
-                leg_phase = phase + math.pi
-
-            swing = math.sin(leg_phase) * stride
-
-            # Hip: steering with yaw
-            targets[base + 0] = STAND_ANGLES[base + 0] + dyaw * 0.15 + dy * 0.05
-            # Thigh: forward/backward swing
-            targets[base + 1] = STAND_ANGLES[base + 1] + swing * 0.6 + dx * 0.1
-            # Calf: lift during swing
-            lift = max(0, math.sin(leg_phase)) * stride * 0.5
-            targets[base + 2] = STAND_ANGLES[base + 2] - lift
-
+        targets = self._gait.compute(dx=dx, dy=dy, dyaw=dyaw, dt=self._time_step * 4)
         self.apply_joint_targets(targets)
 
     def estop(self, reason: str = "") -> None:
@@ -412,12 +402,22 @@ class PyBulletQuadrupedEnv:
     # ------------------------------------------------------------------
 
     def _build_scene(self, scene_name: str) -> None:
-        """Build walls and obstacles from a scene configuration."""
+        """Build walls and obstacles from a scene configuration.
+
+        Checks built-in registry first, then falls back to YAML files
+        in assets/scenes/.
+        """
         factory = SCENE_REGISTRY.get(scene_name)
-        if factory is None:
-            logger.warning("Unknown scene '%s', using empty scene", scene_name)
-            return
-        config = factory()
+        if factory is not None:
+            config = factory()
+        else:
+            yaml_path = _find_yaml_scene(scene_name)
+            if yaml_path is not None:
+                config = load_scene_from_yaml(yaml_path)
+                logger.info("Loaded YAML scene from %s", yaml_path)
+            else:
+                logger.warning("Unknown scene '%s', using empty scene", scene_name)
+                return
 
         for wall in config.walls:
             x, y, hx, hy, hz, yaw = wall

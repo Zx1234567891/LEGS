@@ -43,8 +43,8 @@ def parse_args() -> argparse.Namespace:
         help="Simulation backend: fake (numeric stub) or pybullet (physics + GUI)",
     )
     parser.add_argument(
-        "--scene", choices=["indoor", "outdoor", "maze"], default="indoor",
-        help="Navigation scene (pybullet only)",
+        "--scene", default="indoor",
+        help="Navigation scene: indoor/outdoor/maze or YAML name in assets/scenes/",
     )
     parser.add_argument(
         "--goal", type=str, default="4.0,0.0",
@@ -127,8 +127,11 @@ def main() -> None:
         )
 
     else:
-        logger.error("Real mode not yet implemented — use --mode=sim")
-        sys.exit(1)
+        from legs_dog.sim.real_adapter import RealRobotSim
+
+        sim = RealRobotSim(source="real")
+        actuator = sim.actuator
+        logger.info("RealRobotSim initialized (stub) [session=%s]", sim.session_id)
 
     # --- Safety ---
     safety = SafetyGuard(SafetyConfig(heartbeat_timeout_ms=2000.0))
@@ -179,8 +182,8 @@ def main() -> None:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    # --- Navigation mode (PyBullet) ---
-    if args.sim_backend == "pybullet":
+    # --- Navigation mode (PyBullet or Real) ---
+    if args.sim_backend == "pybullet" or args.mode == "real":
         from legs_dog.navigation import Navigator, NavigationGoal
 
         navigator = Navigator(
@@ -192,6 +195,14 @@ def main() -> None:
             obs_rate_hz=10.0,
             max_steps=args.max_steps,
         )
+
+        # Attach visualizer in GUI mode
+        if args.sim_backend == "pybullet" and not args.no_gui:
+            from legs_dog.sim.visualizer import Visualizer
+            navigator.visualizer = Visualizer(
+                physics_client=sim.env.physics_client,
+                robot_id=sim.env.robot_id,
+            )
 
         nav_goal = NavigationGoal(x=goal_x, y=goal_y, tolerance=0.5)
 
