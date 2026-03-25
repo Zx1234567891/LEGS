@@ -34,13 +34,13 @@ _HIP_SIGN: List[float] = [1.0, -1.0, 1.0, -1.0]
 @dataclass
 class GaitConfig:
     """Tunable gait parameters."""
-    gait_freq: float = 3.5       # Hz — full stride cycle frequency
-    step_height: float = 0.08    # metres — peak foot lift during swing
+    gait_freq: float = 3.0       # Hz — lower freq = more stable
+    step_height: float = 0.04    # metres — lower lift = more stable
     stand_height: float = 0.35   # metres — nominal hip-to-foot vertical
-    stride_scale: float = 0.55   # maps |cmd_vel| → stride amplitude
-    max_stride: float = 0.40     # clamp on stride amplitude (rad equiv)
-    turn_gain: float = 0.25      # dyaw → hip abduction delta
-    lateral_gain: float = 0.15   # dy → hip abduction delta
+    stride_scale: float = 0.30   # conservative stride for stability
+    max_stride: float = 0.20     # clamp low to prevent toppling
+    turn_gain: float = 0.15      # dyaw → hip abduction delta
+    lateral_gain: float = 0.08   # dy → hip abduction delta
 
 
 class TrotGaitController:
@@ -125,8 +125,8 @@ class TrotGaitController:
                 thigh_delta = -stride * (stance_t - 0.5) * 0.6
                 calf_delta = 0.0
 
-            # Forward/backward from dx
-            thigh_delta += dx * 0.25
+            # Forward/backward from dx (negative = forward for Go1 thigh axis)
+            thigh_delta -= dx * 0.15
 
             # Hip abduction: steering + lateral
             hip_delta = (

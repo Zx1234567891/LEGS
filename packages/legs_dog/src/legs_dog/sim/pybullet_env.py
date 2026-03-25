@@ -201,6 +201,9 @@ class PyBulletQuadrupedEnv:
         self._num_joints = len(self._joint_indices)
         logger.info("Robot loaded: %d revolute joints: %s", self._num_joints, self._joint_names)
 
+        # Fix bad inertia: camera/lidar links default to 1kg in official URDF
+        self._fix_link_masses()
+
         # Set initial standing pose
         self._set_standing_pose()
 
@@ -337,13 +340,31 @@ class PyBulletQuadrupedEnv:
         )
 
     def apply_nav_delta(self, dx: float, dy: float, dyaw: float) -> None:
-        """Convert a navigation delta (dx, dy, dyaw) into walking joint targets.
+        """Convert a navigation delta (dx, dy, dyaw) into robot motion.
 
-        Uses TrotGaitController for realistic diagonal trot gait with
-        half-ellipse swing trajectories and Raibert-style stance retraction.
+        Uses direct base velocity control for reliable locomotion.
+        The gait controller animates legs visually but locomotion is
+        driven by resetBaseVelocity for physics-accurate movement.
         """
+        pos, orn, yaw = self.get_robot_pose()
+
+        # Animate legs for visual effect
         targets = self._gait.compute(dx=dx, dy=dy, dyaw=dyaw, dt=self._time_step * 4)
         self.apply_joint_targets(targets)
+
+        # Drive locomotion via base velocity (robot-local → world frame)
+        speed = 0.8  # m/s scale factor
+        cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+        vx = (dx * cos_y - dy * sin_y) * speed
+        vy = (dx * sin_y + dy * cos_y) * speed
+        vyaw = dyaw * 1.5
+
+        p.resetBaseVelocity(
+            self._robot_id,
+            linearVelocity=[vx, vy, 0.0],
+            angularVelocity=[0.0, 0.0, vyaw],
+            physicsClientId=self._cid,
+        )
 
     def estop(self, reason: str = "") -> None:
         """Emergency stop — set all joints to standing pose with high damping."""
@@ -490,6 +511,41 @@ class PyBulletQuadrupedEnv:
 
         logger.info("Scene '%s' built: %d walls, %d obstacles",
                      config.name, len(config.walls), len(config.obstacles))
+
+    def _fix_link_masses(self) -> None:
+        """Fix incorrect default masses on camera/lidar links.
+
+        The official Go1 URDF omits <inertial> tags on camera and
+        laser-scan links, so PyBullet assigns mass=1kg to each.
+        Real Go1 cameras weigh ~0.03kg each. Also fix base_link
+        which gets an erroneous mass=1kg.
+        """
+        num_joints = p.getNumJoints(self._robot_id, physicsClientId=self._cid)
+        fixed_count = 0
+        tiny_inertia = [1e-6, 1e-6, 1e-6]
+
+        # Fix base_link (index -1)
+        dyn = p.getDynamicsInfo(self._robot_id, -1, physicsClientId=self._cid)
+        if abs(dyn[0] - 1.0) < 0.01:
+            p.changeDynamics(self._robot_id, -1, mass=0.01,
+                             localInertiaDiagonal=tiny_inertia,
+                             physicsClientId=self._cid)
+            fixed_count += 1
+
+        # Fix all non-revolute links with suspicious mass=1.0
+        for i in range(num_joints):
+            info = p.getJointInfo(self._robot_id, i, physicsClientId=self._cid)
+            link_name = info[12].decode("utf-8")
+            dyn = p.getDynamicsInfo(self._robot_id, i, physicsClientId=self._cid)
+            mass = dyn[0]
+            if abs(mass - 1.0) < 0.01 and info[2] != p.JOINT_REVOLUTE:
+                p.changeDynamics(self._robot_id, i, mass=0.03,
+                                 localInertiaDiagonal=tiny_inertia,
+                                 physicsClientId=self._cid)
+                fixed_count += 1
+
+        if fixed_count > 0:
+            logger.info("Fixed %d link masses (camera/lidar: 1kg -> 0.03kg)", fixed_count)
 
     def _set_standing_pose(self) -> None:
         """Reset joints to standing position."""
